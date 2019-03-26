@@ -1,0 +1,40 @@
+class;antimicrobial;Escherichia coli (colibacillosis);Salmonella pullorum;Salmonella gallinarum;Pasteurella multocida (acute) (fowl cholera);Pasteurella multocida (chronic pasteurellosis);Ornitobacterium rhinotracheale;Avibacterium paragallinarum;Gallibacterium anatis;Clostridium perfringens (Necrotic enteritis)
+Penicillins;AMOXICILLIN;80.0;24.8;24.8;5.0;5.0;51.6;14.0;36.0;3.5
+Penicillins;AMPICILLIN;82.0;13.0;13;2.3;2.3;40;38.9;36.0;0.0
+First generation cephalosporins;CEPHALEXIN;50.0;0.0;0.0;1.8;1.8;63;16.8;3.0;0.0
+Third generation cefalosporins;CEFOTAXIME;28.6;0.0;0.0;1.8;1.8;63;16.8;3.0;0.0
+Aminoglycosides;APRAMYCIN;;;;15.0;15.0;;;;
+Aminoglycosides;GENTAMICIN;30.9;2.6;2.6;4.3;4.3;93.1;46.8;4.0;100.0
+Aminoglycosides;SPECTINOMYCIN;70.1;45.0;45;1.2;1.2;9.1;30.5;90.0;
+Aminoglycosides;STREPTOMYCIN;69.0;27.0;27;8.5;8.5;;72.7;21.0;100.0
+Aminoglycosides;NEOMYCIN;54.4;3.9;3.9;8.5;8.5;;77.4;14.0;96.5
+Macrolides;ERYTHROMYCIN;90.0;100;100;18.0;18.0;33.8;77.8;43.0;17.5
+Macrolides;TYLOSIN;100.0;;;97.0;97.0;98;6.0;100.0;0.0
+Macrolides;LINCOMYCIN;94.0;;;51.2;51.2;85.0;90.8;;62.4
+Macrolides;SPIRAMYCIN;;;;;;96.0;;;
+Macrolides;JOSAMYCIN;;;;;;;;;
+Macrolides;TILMICOSIN;99.0;;;2.5;2.5;54.4;;;
+Phenicols;CHLORAMPHENICOL;63.5;0.0;0.0;3.3;3.3;25.0;0.0;;23.0
+Phenicols;FLORFENICOL;20.9;0.0;0.0;0.6;0.6;25.0;;2.0;0.0
+Phenicols;THIAMPHENICOL;;;;;;25.0;;;
+Tetracyclines;TETRACYCLINE;91.0;11.2;11.2;13.8;13.8;21.0;80.0;90.0;66.6
+Tetracyclines;OXYTETRACYCLINE;98.0;;;8.6;8.6;;66.6;94.0;65.9
+Tetracyclines;DOXYCYCLINE;95.0;0.0;0.0;11.1;11.1;55.0;63.9;80.0;98.0
+Sulphonamides;SULFACHLOROPYRIDAZINE;;;;;;40.0;9.0;;50.0
+Sulphonamides;SULFADIMETHOXINE;92.5;;;9.0;9.0;99.2;9.0;43.0;50.0
+Sulphonamides;SULFADIMIDINE;;;;;;;9.0;;50.0
+Sulphonamides;SULFAGUANIDIN;;;;;;;9.0;;50.0
+Sulphonamides;SULFAMETHOXYPYRIDAZINE;;;;;;;9.0;;50.0
+Sulphonamides;SULFADIAZINE;;;;;;;9.0;;50.0
+Sulphonamides;SULFAMETHAZINE;;;;;;;9.0;;50.0
+Sulphonamides;SULPHAMETHOXAZOLE;;44.5;44.5;;;;9.0;;50.0
+Sulphonamides;SULPHATHIAZOLE;;;;;;;9.0;;50.0
+Pyrimidine inhibitor;TRIMETHOPRIM;46.5;82.8;82.8;19.5;19.5;89.0;44.1;17.0;50.2
+Quinolones;CIPROFLOXACIN;67.0;2.2;2.2;4.5;4.5;;33.4;;58.0
+Quinolones;ENROFLOXACIN;32.0;2.8;2.8;4.7;4.7;70.8;29.7;4.0;41.0
+Quinolones;FLUMEQUINE;80.0;;;40;40;93.3;;;
+Quinolones;NORFLOXACIN;54.0;0.0;0.0;8.1;8.1;;;;67.0
+Quinolones;OXOLINIC ACID;;;;;;;;;
+Polypeptides;ENRAMYCIN;100.0;100.0;100.0;100.0;100.0;100.0;100.0;100.0;5.0
+Polymixins;COLISTIN;12.0;0.0;0.0;0.0;0.0;100.0;20;100;100.0
+;;;;;;;;;;
