@@ -1,0 +1,1972 @@
+---
+title: "The impact of AMR in chicken production"
+csl: the-american-naturalist.csl
+output:
+  html_document:
+    theme: cerulean
+    toc: yes
+  pdf_document:
+    toc: yes
+<!-- bibliography: references.bib -->
+editor_options: 
+  chunk_output_type: console
+---
+
+<!--
+IMAGES:
+Insert them with: ![alt text](image.png)
+You can also resize them if needed: convert image.png -resize 50% image.png
+If you want to center the image, go through HTML code:
+<div style="text-align:center"><img src ="image.png"/></div>
+
+REFERENCES:
+For references: Put all the bibTeX references in the file "references.bib"
+in the current folder and cite the references as @key or [@key] in the text.
+Uncomment the bibliography field in the above header and put a "References"
+title wherever you want to display the reference list.
+-->
+
+```{r set-up, include = FALSE}
+knitr::knit_hooks$set(margin = function(before, options, envir) {
+  if (before) par(mgp = c(1.5, .5, 0), bty = "n", plt = c(.105, .97, .13, .97))
+  else NULL
+})
+
+knitr::opts_chunk$set(margin = TRUE, prompt = TRUE, comment = "",
+                      collapse = TRUE, cache = FALSE, autodep = TRUE,
+                      dev.args = list(pointsize = 11), fig.height = 3.5,
+                      fig.width = 4.24725, fig.retina = 2, fig.align = "center")
+
+options(width = 77)
+```
+
+```{r include = FALSE}
+# overwritting some functions:
+library <- function(...) base::library(..., warn.conflicts = FALSE, quiet = TRUE)
+require <- function(...) base::require(..., warn.conflicts = FALSE, quiet = TRUE)
+```
+
+```{r include = FALSE, eval = FALSE}
+# redefining the locales:
+l <- "en_US.UTF-8"
+Sys.setenv(LANGAGE = l)
+Sys.setlocale(locale = l)
+Sys.setlocale("LC_MESSAGES", l)
+```
+
+```{r include = FALSE, eval = FALSE}
+# cleaning the packages space:
+search_path <- search()
+pkgs <- c("stats", "graphics", "grDevices", "utils", "datasets", "methods", "base")
+tdet <- grep("package", search_path[!(search_path %in% paste0("package:", pkgs))],
+             value = TRUE)
+for(i in tdet) detach(i, unload = TRUE, character.only = TRUE)
+```
+
+## Preambule
+
+### Data
+
+The analysis detailed here requires the presence of the following 6 data files
+in a directory named `data` in the current working directory:
+
+```{r include = FALSE}
+dir <- function(...) grep("Marc|Juan_1|completed.txt|flocks.xlsx",
+                          base::dir(...), value = TRUE, invert = TRUE)
+```
+
+```{r}
+dir("data")
+```
+
+Where
+
+* `abbrevations.txt` contains coma-separated abbrevations of pathogens and drugs;
+* `AMR_pathogens_221217.xlsx` contains the resistance matrix from the
+**literature** and **expert opinion**;
+* `Completed_cycles_180118.xlsx` contains, for each cycle, the names of the
+farms that have completed the cycle;
+* `Disasease_in_flocks_221217_cBao.xlsx` contains the symptoms data per farm,
+cycle and week, **recorded by the farmers**;
+* `Scoring_pathogens_DrThu_Juan_Niwat_221217.xlsx` contains
+    + the scoring of incidence of 25 etiologies, from **expert opinion**
+    + the presence of 6 symptoms for each of the 25 etiologies (from the 
+**literature**)
+    + the age (older or young) at which the etiologies are most often reported 
+(from the **literature**)
+* `Use_Antimicrobial_by_week_221217.xlsx` contains the use of antimicrobials by
+farm, cycle and week, **recorded by the farmers**
+
+A link to a dropbox folder that contains these files can be asked to Marc
+Choisy ([mchoisy@gmail.com](mailto:mchoisy@gmail.com)). We can then define
+handlers to these files as follow:
+
+```{r}
+abbr_file      <- "data/abbreviations.txt"
+amr_file       <- "data/AMR_pathogens_221217.xlsx"
+completed_file <- "data/Completed_cycles_180118.xlsx"
+symptoms_file  <- "data/Disasease_in_flocks_221217_cBao.xlsx"
+etiology_file  <- "data/Scoring_pathogens_DrThu_Juan_Niwat_221217.xlsx"
+amu_file       <- "data/Use_Antimicrobial_by_week_221217.xlsx"
+```
+
+### Packages
+
+If not installed, install the following packages from 
+[CRAN](https://cran.r-project.org):
+
+```{r}
+packages <- c("magrittr", "readxl", "naivebayes", "dplyr", "devtools",
+              "vioplot", "magrittr", "tidyr", "purrr", "Thermimage")
+installed_packages <- rownames(installed.packages())
+not_installed <- setdiff(packages, installed_packages)
+if (length(not_installed) > 0) install.packages(not_installed)
+```
+
+If not installed, install `mcutils` from
+[GitHub](https://github.com/choisy/mcutils):
+
+```{r}
+if (!"mcutils" %in% installed_packages)
+  devtools::install_github("choisy/mcutils")
+```
+
+Loading some packages for interactive use:
+
+```{r message = FALSE}
+library(vioplot)    # vioplot()
+library(tidyr)      # gather()
+library(mcutils)    # ovv()
+library(magrittr)   # %>%, %$%, %<>%
+library(readxl)     # read_excel()
+library(naivebayes) # naive_bayes(), predict.naive_bayes()
+library(dplyr)      # filter(), funs(), group_by(), left_join(), matches(),
+                    # mutate(), mutate_at(), starts_with(), right_join(),
+                    # select(), summarize(), summarise_all(), ungroup()
+```
+
+### Utilitary functions
+
+Customizing some base R functions:
+
+```{r}
+data.frame2 <- function(...) data.frame(..., stringsAsFactors = FALSE) 
+```
+
+
+## Functions for reading the data
+
+There are 2 types of data collected from the farms: **symptoms surveillance**
+and **antibiotics usage**. There are 2 types of data from the literature and
+expert opinions: **antibiotic resistance** and **diseases symptoms**. In this
+section, we define 4 reading functions:
+
+* `read_amr` that reads **antibiotic resistance** data from the literature and
+expert opinion;
+* `read_etiology` that reads **diseases symptoms** from the literature;
+* `read_surveillance` that reads **surveillance data** from completed cycle,
+itself using the functions
+    + `read_symptoms`
+    + `read_amu`
+    + `read_completed`
+    + `extract_ab`
+    + `correct_ab_names`
+
+### Disease symptoms from surveillance
+
+In reading the data from file, we need to make sure that there is no missing
+week for any cycle of any farm. For that we define a function `add_missing_rows`
+that itself uses the function `reshape`. The function `reshape` takes 4 vectors
+`cycle`, `farmcode`, `min` and `max` and returns a data frame of 3 columns with
+the sequence of week number from `min` to `max` (by step of 1) for the given
+cycles and farms.
+
+```{r}
+reshape <- function(cycle, farmcode, min, max) {
+  require(purrr) # map2()
+  map2(min, max, seq) %>% 
+    map2(farmcode, ., data.frame2) %>% 
+    map2(cycle, ., data.frame2) %>% 
+    do.call(rbind, .)
+}
+```
+
+The above function `reshape` is used exclusively by the function
+`add_missing_rows` that works on a data frame `df` of symptoms data:
+
+```{r}
+add_missing_rows <- function(df) {
+  require(magrittr) # %$%, %>%  
+  require(dplyr)    # group_by(), summarise(), left_join()
+  by <- c("CYCLE", "FARMCODE", "WEEK")
+  df %>%
+    group_by(CYCLE, FARMCODE) %>%
+    summarise(min = min(WEEK), max = max(WEEK)) %$%
+    reshape(CYCLE, FARMCODE, min, max) %>% 
+    setNames(by) %>% 
+    left_join(df, by)
+}
+```
+
+This function makes sure that there is no missing week for any cycle of any
+farm (there is indeed for example the week 4 of cycle 2 of farm 88 that is
+missing). The following function uses the previously described functions
+`add_missing_rows` and reads a file of symptoms:
+
+```{r}
+read_symptoms <- function(file) {
+  require(dplyr) # %>%, select(), filter(), mutate_if(), mutate_at(), vars(), funs(), starts_with()
+  file %>%
+    readxl::read_excel() %>% 
+    select(FARMCODE, CYCLE, WEEK, starts_with("S")) %>% # deletes useless columns
+    filter(!is.na(FARMCODE)) %>% # removes empty lines
+    mutate_if(is.numeric, as.integer) %>%
+    add_missing_rows() %>% # (there is still one missing row...)
+    mutate_at(vars(starts_with("S")), funs(. > 0)) # recodes symptoms
+}
+```
+
+
+### Antimicrobials usage from surveillance
+
+The following function reads AMU data:
+
+```{r}
+read_amu <- function(file) {
+  require(dplyr) # %>%, rename(), mutate_at()
+  file %>% 
+    readxl::read_excel() %>% 
+    rename(WEEK  = WEEKNO,
+           CYCLE = FLOCKSEQUENCE) %>% 
+    mutate_at(vars(matches("^C|W")), as.integer)
+}
+```
+
+### Reading the list of completed cycles
+
+The following function reads a list of the names of the completed cycles:
+
+```{r}
+read_completed <- function(file) {
+  require(dplyr) # %>%, mutate()
+  file %>% 
+    readxl::read_excel() %>% 
+    tidyr::gather("CYCLE", "FARMCODE") %>% 
+    na.exclude() %>% 
+    mutate(CYCLE = CYCLE %>% sub("Cycle", "", .) %>% as.integer())
+}
+```
+
+
+### Reading surveillance data altogether
+
+The following function extracts the vector of antibiotics names used for a given
+cycle, farm and week. `df` is the data frame that contains the antimicrobial
+column in addition to the cycle, farm and week columns.
+
+```{r}
+extract_ab <- function(cycle, farm, week, df) {
+  require(dplyr) # %>%, filter(), select()
+  df %>%
+    filter(CYCLE == cycle, FARMCODE == farm, WEEK == week) %>%
+    select(ANTIMICROBIAL) %>%
+    unlist() %>% 
+    unname()
+}
+```
+
+The following function corrects some antimicrobials names:
+
+```{r}
+correct_ab_names <- function(x) x %>% 
+  sub("OXTETRACYCLINE" , "OXYTETRACYCLINE" , .) %>%
+  sub("SULFADIMETHOXIN", "SULFADIMETHOXINE", .)
+```
+
+The following function uses `read_symptoms`, `read_amu`, `extract_ab` and
+`read_completed` and returns the surveillance data:
+
+```{r}
+read_surveillance <- function(symptoms_file, amu_file, completed_file = NULL) {
+  require(dplyr) # %>%, select, mutate, right_join
+  if (is.null(completed_file)) f <- I
+  else f <- function(x) {
+         completed_file %>% 
+           read_completed() %>% 
+           left_join(x, c("CYCLE", "FARMCODE"))
+       }
+  amu <- read_amu(amu_file) # because used again 4 lines below
+  amu %>% 
+    select(-ANTIMICROBIAL) %>%
+    unique() %>%
+    mutate(antimicrobial = purrr::pmap(list(CYCLE, FARMCODE, WEEK), extract_ab, amu) %>% 
+# correcting some antimicrobials' names:
+                             lapply(correct_ab_names)) %>% 
+# joining with symptoms and optionally filtering completed cycles before returning:
+    right_join(read_symptoms(symptoms_file), by = c("CYCLE", "FARMCODE", "WEEK")) %>% f()
+}
+```
+
+
+### Etiologic causes of diseases from literature and expert opinion
+
+This function reads the data linking symptoms to etiology from literature and
+experts opinions:
+
+```{r}
+read_etiology <- function(file) {
+  require(dplyr) # %>%, mutate_at, mutate, select, vars, matches, funs, mutate_if
+  file %>%
+    readxl::read_excel() %>% 
+    mutate_at(vars(matches("^S_|S\\.")), funs(!is.na(.))) %>% 
+    mutate(old   = Age %in% c("All ages", "Older"),
+           young = Age %in% c("All ages", "Young")) %>% 
+    select(-`High mortality`, -X__1, -Age) %>%
+    mutate_if(is.numeric, function(x) x / 100)
+}
+```
+
+
+### Antimicrobial resistance from the literature and expert opinion
+
+The function `replace_na` replaces each missing value of a vector by the last
+non-missing value that precedes it:
+
+```{r}
+replace_na <- function(x) {
+  for(i in 2:length(x))
+    if(is.na(x[i])) x[i] <- x[i - 1]
+  x
+}
+```
+
+This function is used exclusively by the following `.read_amr` function:
+
+```{r}
+.read_amr <- function(file) {
+  require(dplyr) # %>%, rename, select, mutate
+  file %>%
+    readxl::read_excel() %>% 
+    rename(class = X__1, drug = X__2) %>%
+    select(-starts_with("X__")) %>% 
+    mutate(class = replace_na(class))
+}
+```
+
+That is in turn used exclusively by the following function that reads the AMR
+data. It basically calls the `.read_amr` function, adds the viruses and does
+some corrections:
+
+```{r}
+read_amr <- function(file, viruses = NULL) {
+  require(dplyr) # %>%, rename, mutate
+# one corrective patch on the value of a specific resistance:
+  patch1 <- function(x) {
+    x[x$class == "Sulphonamides", "Eimeria spp. (coccidiosis)"] <- 25
+    x
+  }
+  file %>%
+    .read_amr() %>%
+    cbind(setNames(data.frame(matrix(rep(100, length(viruses)), 1, length(viruses))), viruses)) %>% 
+# correting some parasites and drugs names:
+    rename(`Ornithobacterium rhinotracheale` = `Ornitobacterium rhinotracheale`) %>% 
+    mutate(drug = sub("SULPHAMETHOXAZOLE", "SULFAMETHOXAZOLE", drug),
+           drug = sub("SULPHATHIAZOLE",    "SULFATHIAZOLE",    drug)) %>% 
+    patch1()
+}
+```
+
+## Reading the data
+
+Now that the functions needed for reading the data are defined, we can use them
+and read data from files:
+
+The surveillance data, including symptoms and AMU (this uses 3 files):
+
+```{r}
+surveillance <- read_surveillance(symptoms_file, amu_file, completed_file)
+```
+
+```{r patch1, include = F, eval = F}
+completed <- read.table("data/completed.txt", TRUE, "\t") %>% 
+  gather("key", "value") %>%
+  filter(value != "")
+completed$key <- as.integer(sub("Cycle", "", completed$key))
+surveillance <- left_join(setNames(completed, c("CYCLE", "FARMCODE")),
+          surveillance, c("CYCLE", "FARMCODE"))
+```
+
+Data on etiologic causes (1 file):
+
+```{r}
+etiology <- read_etiology(etiology_file)
+```
+
+AMR data (1 file):
+
+```{r}
+amr <- read_amr(amr_file,
+                grep("virus|coccidiosis", etiology$Pathogen, TRUE, value = TRUE))
+```
+
+Abbreviations of pathogens and drugs' names (1 file):
+
+```{r}
+abbreviations <- abbr_file %>% 
+  read.csv(FALSE, stringsAsFactors = FALSE) %$%
+  setNames(V2, V1)
+```
+
+
+## Exploration of data sets
+
+### Etiology matrix
+
+```{r}
+sort_path <- function(path, parasite) {
+  lapply(1:0,
+         function(x) sort(grep("virus", setdiff(path, parasite), TRUE, value = TRUE, invert = x))) %>% 
+    unlist() %>% 
+    c(parasite)
+}
+```
+
+The following function uses the `sort_path` function to sort a data frame
+according to its column `Pathogen`:
+
+```{r}
+sort_with_pathogen <- function(df, parasite) {
+  sort_path(df$Pathogen, parasite) %>% 
+    data.frame2(Pathogen = .) %>% 
+    left_join(df, "Pathogen") %>% 
+    `rownames<-`(.$Pathogen)
+}
+```
+
+The following function is a wraper around the `image` function, making sure that
+the cells of the image are square. It takes as input the `z` matrix, not the `x`
+or `y` vectors.
+
+```{r}
+image_square <- function(z, ...) {
+  dim_mat <- dim(z)
+  pin <- par("pin")
+  ratio_data <- Reduce(`/`, dim_mat)
+  ratio_plot <- Reduce(`/`, pin)
+  if(ratio_data < ratio_plot) 
+    opar <- par(pin = c(ratio_data * pin[2], pin[2])) # the device is larger than the data
+  else
+    opar <- par(pin = c(pin[1], pin[1] / ratio_data)) # the device is taller than the data
+  on.exit(par(opar))
+  image(z, ...)
+  box(bty="o")
+  list(row_from_top_to_bottom = rev(colnames(z)),
+       col_from_left_to_right = rownames(z))
+}
+```
+
+```{r}
+add_path_names <- function(x, l = -6.5) {
+  mtext2 <- function(...) mtext(..., side = 2, line = l, las = 1)
+  ys <- seq(1, 0, le = length(x))
+  for(i in c(1:9, 13:15)) mtext2(bquote(italic(.(x[i]))), at = ys[i])
+  for(i in c(10:11, 16:24)) mtext2(x[i], at = ys[i])
+  mtext2(substitute(paste(italic("Pseudomonas"), " spp.")), at = ys[12])
+  mtext2(substitute(paste(italic("Eimeria"), " spp.")), at = ys[25])
+}
+```
+
+Let's use these 2 functions in the plotting function below:
+
+```{r}
+plot_etiology_matrix <- function(etiologydata, line) {
+  out <- sort_with_pathogen(etiologydata, "Eimeria spp. (coccidiosis)") %>% 
+    select(matches("^S(_|\\.)"), young, old) %>% 
+    t() %>% 
+    Thermimage::mirror.matrix() %>% 
+    image_square(col = c("lightgrey", "black"), axes = FALSE)  # grey absence, black presence
+  mtext(c("R", "D", "C", "M", "L", "S", "Y", "O"), at = seq(0, 1, le = 8)) # 8 conditions
+  add_path_names(abbreviations[out$row_from_top_to_bottom], line)
+}
+```
+
+Let's try it:
+
+```{r fig.height = 1.3 * 3.5, fig.width = 4.24725}
+plot_etiology_matrix(etiology, -6.5)
+```
+
+Where black is presence and grey is absence and the meaning of the columns are
+respiratory infection (R), diarrhoea (D), CNS (C), malaise (M), legs lesions (L),
+sudden death (S) and young (Y) and old (O) age at infection.
+
+### Expert opinion on relative incidences
+
+```{r}
+plot_expert_opinion <- function(etiologydata, line) {
+  out <- sort_with_pathogen(etiologydata, "Eimeria spp. (coccidiosis)") %>% 
+    select(starts_with("Sc")) %>% 
+    t() %>% 
+    Thermimage::mirror.matrix() %>% 
+    image_square(col = rev(heat.colors(15)), axes = FALSE)
+  mtext(1:3, at = seq(0, 1, le = 3)) # 3 experts
+  add_path_names(abbreviations[out$row_from_top_to_bottom], line)
+}
+```
+
+Let's try it:
+
+```{r fig.height = 1.3 * 3.5, fig.width = 4.24725}
+plot_expert_opinion(etiology, -8.5)
+```
+
+
+### Functions to generate diseases episodes
+
+The function `fill_gaps` takes a vector of logicals (or zeros and ones) and
+replaces all the `1 0 1` sequences by `1 1 1`:
+
+```{r}
+fill_gaps <- function(x) {
+  as.integer(x) %>%         # because easier to deal with 1-character encoding
+    paste(collapse = "") %>% 
+    gsub("101", "111", .) %>% 
+    gsub("NA", "x", .) %>%  # need to replace potential NA by 1-character...
+    strsplit("") %>%        # ... because of the strsplit that follows
+    unlist(FALSE) %>%       # because strsplit returns a list
+    sub("x", NA, .) %>%     # back to NA
+    as.numeric() %>% 
+    as.logical()
+}
+```
+
+The function `episodes` identifies the different disease episodes. It would for
+example transform `1 1 1 0 0 1 1 0 0 0 1 0` into `1 1 1 0 0 2 2 0 0 0 3 0`:
+
+```{r}
+episodes <- function(x) {
+  x <- rle(x)
+  sel <- which(x$values > 0)
+  x$values[sel] <- seq_along(sel)
+  inverse.rle(x)
+}
+```
+
+The following function uses the two above-defined functions `fill_gaps` and
+`episodes` to generate an episode column on a surveillance data frame. There is
+one `fillgaps` option that specifies whether `1 0 1` sequences of weeks should
+be transformed into `1 1 1`.
+
+```{r}
+make_episodes <- function(df, fillgaps = TRUE) {
+  require(dplyr)
+  if (fillgaps) f <- fill_gaps else f <- I
+  df %>%
+    mutate(disease = select(., starts_with("S")) %>% # computing...
+                       rowSums() %>%                 # ... the presence...
+                       `>`(., 0)) %>%                # ... of disease
+    group_by(CYCLE, FARMCODE) %>% 
+    mutate(disease = f(disease), # optionally transforms "1 0 1" into "1 1 1"
+           episode = episodes(disease)) %>% # generates diseases episodes
+    group_by(episode, add = TRUE) %>% 
+    mutate_if(is.logical, any) %>% # merge the symptoms for each episod
+    ungroup() %>% 
+    select(-disease) %>% 
+    mutate_at(vars(starts_with("S"), episode),  # removes symptoms where there...
+              funs(ifelse(episode > 0, ., NA))) # ... is no disease episode
+}
+```
+
+### Looking at surveillance data
+
+```{r}
+(cycles <- surveillance %>%
+  make_episodes(fillgaps = TRUE) %>% 
+  group_by(CYCLE) %>%
+  select(CYCLE, FARMCODE) %>%
+  unique() %>%
+  ungroup() %>%
+  split(.$CYCLE) %>%
+  lapply(`[[`, 2))
+sapply(cycles, length)
+```
+
+Verifying that all farms from cycle 3 are in cycle 2 and that all farms from
+cycle 2 are in cycle 1:
+
+```{r}
+all(cycles[[3]] %in% cycles[[2]])
+all(cycles[[2]] %in% cycles[[1]])
+```
+
+### Antiobiotics usage from surveillance
+
+Note that in some farms, some weeks, there is no antibiotic use, whereas in
+other weeks and farms, there is 1 or more than 1 antibiotic used at the same
+time:
+
+```{r}
+amu_file %>% 
+  read_amu() %$%
+  table(FARMCODE, WEEK) %>%
+  ovv()
+```
+
+### Plotting surveillance data
+
+The function `survey_episodes` puts in shape a `surveillance` object
+(**for a given cycle**) for easier visualization of both the surveyed weeks and
+the weeks for which there is a disease episode. `0` means absence of survey, `1`
+means survey but absence of disease episode and `2` means survey and disease
+episode.
+
+```{r}
+survey_episodes <- function(df) {
+# utilitary function -----------------------------------------------------------
+  make_farm_week_table <- function(df) {
+    df %$%
+      table(FARMCODE, WEEK) %>% 
+      unclass() %>% 
+      as.data.frame()
+  }
+  surveyed_weeks <- make_farm_week_table(df)
+  df %>% filter(episode > 0) %>% 
+    make_farm_week_table() %>% 
+    mutate(FARMCODE = rownames(.)) %>% 
+    right_join(data.frame2(FARMCODE = rownames(surveyed_weeks)), "FARMCODE") %>% 
+    select(-FARMCODE) %>% 
+    t() %>% 
+    as.data.frame() %>% 
+    mutate(., WEEK = rownames(.)) %>% 
+    right_join(data.frame2(WEEK = colnames(surveyed_weeks)), "WEEK") %>%
+    select(-WEEK) %>% 
+    t() %>%
+    as.data.frame() %>% 
+    mutate_all(funs(replace(., is.na(.), 0))) %>%
+    `+`(surveyed_weeks, .)
+}
+```
+
+```{r test_survey_episodes, eval = FALSE, include = FALSE}
+surveillance %>%
+  make_episodes(fillgaps = TRUE) %>%
+  filter(CYCLE == 1) %>%
+  survey_episodes() %>% 
+  ovv()
+```
+
+The following function sorts the farms of an output of the `survey_episodes`
+function according to the duration of their cycle:
+
+```{r}
+sort_episodes <- function(df) {
+  df[names(sort(rowSums(df > 0))), ]
+}
+```
+
+Among the arguments of the following function, `df` is an output of the function
+`survey_episodes` (**for one given cycle**). This function plots the status of
+each farm (or cycle, by row) and week (by column) according to whether there is
+or not (`col_no_survey`) survey and, in the first case, whether there is 
+(`col_survey_disease`) or not (`col_survey_no_dis`) disease. Note that it uses
+the two previously defined functions `survey_episodes` and `sort_episodes`:
+
+```{r}
+plot_survey_episode <- function(df, sort = TRUE, with_amu = FALSE,
+                                col_no_survey = "grey",
+                                col_survey_no_dis = "blue",
+                                col_survey_disease = "red",
+                                amu_col = RColorBrewer::brewer.pal(7, "YlOrRd"),
+                                xlab = "week", ylab = "farm") {
+  require(magrittr)
+# a tuned image function ---------------------------------------------------------
+  image2 <- function(z) {
+    image(1:nrow(z), 1:ncol(z), z, xlab = xlab, ylab = ylab,
+          col = c(col_no_survey, col_survey_no_dis, col_survey_disease))
+    abline(v = 1:nrow(z) - .5, col = "white", lwd = .5)
+    abline(h = 1:ncol(z) - .5, col = "white", lwd = .5)
+    box(bty = "o")
+    z # output equal to input to make it pipe compliant
+  }
+# a function to retrieve farms codes ---------------------------------------------
+  get_farms_codes <- function(df) setNames(1:ncol(df), colnames(df))
+# optionally sorting the data ----------------------------------------------------
+  if (sort) optionally_sort <- sort_episodes else optionally_sort <- I
+# plotting the survey and disease episodes ---------------------------------------
+  farms <- # codes of the farms for output
+    df %>% 
+    survey_episodes() %>% 
+    optionally_sort() %>% 
+    t() %>%
+    image2() %>% 
+    get_farms_codes()
+# adding AMU ---------------------------------------------------------------------
+  if (with_amu) {
+    df %>% 
+      mutate(nb_ab = sapply(antimicrobial, length)) %>% 
+      filter(nb_ab > 0) %$% 
+      points(WEEK, farms[FARMCODE], pch = 19, col = amu_col[nb_ab])
+  }
+# returning output ---------------------------------------------------------------
+  farms
+}
+```
+
+The following function calculates the prevalence of disease by week and across
+farms. It takes an output of the function `survey_episodes`
+(**for one given cycle**) as input argument.
+
+```{r}
+binom_test <- function(df, ci = .95) {
+  df %>%
+    (function(y)
+       Map(function(x, n)
+             unlist(binom.test(x, n, conf.level = ci)[c("estimate", "conf.int")]),
+           colSums(y > 1), colSums(y > 0))) %>%
+    data.frame()
+}
+```
+
+The following function uses the `binom_test` function to plot the prevalence of
+disease by week and across farms, with confidence interval.
+
+```{r}
+plot_nb_episodes <- function(df) {
+  xlim <- range(df$WEEK) + c(-.5, .5)
+  df %<>% survey_episodes()
+  prevalences <- binom_test(df)
+  xval <- as.numeric(names(df)) %>%
+    (function(x) as.vector(t(cbind(x - .5, x + .5))))
+  plot(NA, xlim = xlim, ylim = c(0, 1), type = "n", xaxs = "i", yaxs = "i",
+       axes = FALSE, ann = FALSE)
+  abline(h = seq(0, 1, .1), col = "lightgrey", lwd = .75)
+  abline(h = seq(0, 1, .2), col = "darkgrey")
+  abline(v = seq(.5, 26.5, 1), col = "lightgrey")
+  polygon(c(xval, rev(xval)),
+          c(rep(prevalences[2, ], each = 2), rep(rev(prevalences[3, ]), each = 2)),
+          border = NA, col = adjustcolor("lightblue", .6))
+  lines(xval, rep(prevalences[1, ], each = 2), col = "darkblue")
+  axis(3)
+  mtext("week", 3, 1.5)
+  axis(4)
+  mtext("prevalence", 4, 1.5)
+  box(bty = "o")
+}
+```
+
+The following function puts the previous `plot_survey_episode` and
+`plot_nb_episodes` together:
+
+```{r}
+plot_epis_amu <- function(df, sort = TRUE, with_amu = FALSE, top = .25,
+                          col_no_survey = "grey",
+                          col_survey_no_dis = "blue",
+                          col_survey_disease = "red",
+                          amu_col = RColorBrewer::brewer.pal(7, "YlOrRd"),
+                          xlab = "week", ylab = "farm") {
+# parameters of the layout of the plot -----------------------------------------
+  npar <- par("plt")
+  npar[3] <- .075
+  npar[4] <- 1 - npar[3]
+  npar[2] <- 1 - npar[1]
+  y4 <- npar[4]
+  y3 <- y4 - top * diff(npar[3:4])
+  npar[4] <- y3
+# bottom subfigure -------------------------------------------------------------
+  opar <- par(plt = npar)
+  farms <- plot_survey_episode(df, sort, with_amu, col_no_survey,
+                               col_survey_no_dis, col_survey_disease, amu_col,
+                               xlab, ylab)
+# top subfigure ----------------------------------------------------------------
+  npar[3] <- y3
+  npar[4] <- y4
+  par(plt = npar, new = TRUE)
+  plot_nb_episodes(df)
+  par(opar)
+# the output -------------------------------------------------------------------
+  farms
+}
+```
+
+Let's see that for the 3 cycles:
+
+Cycle 1:
+
+```{r fig.height = 6, fig.width = 4.5}
+surveillance %>%
+  make_episodes(fillgaps = TRUE) %>%
+  filter(CYCLE == 1) %>%
+  plot_epis_amu(sort = TRUE, with_amu = FALSE)
+```
+
+Cycle 2:
+
+```{r fig.height = 6, fig.width = 4.5}
+surveillance %>%
+  make_episodes(fillgaps = TRUE) %>%
+  filter(CYCLE == 2) %>%
+  plot_epis_amu(sort = TRUE, with_amu = FALSE)
+```
+
+Cycle 3:
+
+```{r fig.height = 6, fig.width = 4.5}
+surveillance %>%
+  make_episodes(fillgaps = TRUE) %>%
+  filter(CYCLE == 3) %>%
+  plot_epis_amu(sort = TRUE, with_amu = FALSE)
+```
+
+We can also put all the cycles together, in which case we need to somehow rename
+the farms so that it not only accounts for the farm code, but also for the cycle
+number:
+
+```{r fig.height = 7, fig.width = 4.5}
+surveillance %>%
+  mutate(FARMCODE = paste(CYCLE, FARMCODE, sep = "-")) %>%
+  make_episodes(fillgaps = TRUE) %>%
+  plot_epis_amu(sort = TRUE, with_amu = FALSE, ylab = "cycle")
+```
+
+
+### Symptoms from surveillance data
+
+The following function generates the symptoms set for all the diseases'
+episodes' weeks:
+
+```{r}
+episodes_weeks <- function(df, fillgaps = TRUE) {
+  df %>% 
+    mutate(FARMCODE = paste(CYCLE, FARMCODE, sep = "_"),
+           young    = WEEK < 7,
+           old      = !young) %>%
+    make_episodes(fillgaps) %>% 
+    na.exclude() %>% 
+    mutate(FARMCODE = paste(FARMCODE, episode, sep = "_")) %>% 
+    select(-WEEK, -antimicrobial, -CYCLE, -episode)
+}
+```
+
+Let's use the above function to have a look at the sets of symptoms observed in
+the farms:
+
+```{r}
+observed_symptoms <- surveillance %>% 
+  episodes_weeks() %>% 
+  unique() # because we want to look at the set of symptoms by episode, whatever their duration.
+```
+
+The following function calls the `image_square` function to help visualizing the
+sets of symptoms observed in the farms:
+
+```{r}
+plot_observed_symptoms <- function(obs) {
+  obs %>% 
+    select(-FARMCODE) %>% 
+    t() %>% 
+    Thermimage::mirror.matrix() %>% 
+    image_square(col = c("lightgrey", "black"), axes = FALSE)
+  conditions <- c("R", "D", "C", "M", "L", "S", "Y", "O")
+  mtext(conditions, at = seq(0, 1, le = length(conditions)), family = "mono")
+  ys <- seq(0, 1, le = nrow(obs))
+  format <- "% 5s % 6s % 2s"
+  mtext2 <- function(...) mtext(..., side = 2, line = -6.5, las = 2, family = "mono")
+  mtext2(sprintf(format, "cycle", "farm", "ep"), at = tail(ys, 1) + ys[2])
+  mtext2(sapply(rev(strsplit(obs$FARMCODE, "_")),
+                function(x) do.call(function(...) sprintf(format, ...), as.list(x))), at = ys)
+}
+```
+
+We use the above function to see the first 25 sets of symptoms:
+
+```{r fig.height = 1.3 * 3.5, fig.width = 4.24725}
+plot_observed_symptoms(head(observed_symptoms, 25))
+```
+
+and the last 25 sets of symptoms:
+
+```{r fig.height = 1.3 * 3.5, fig.width = 4.24725}
+plot_observed_symptoms(tail(observed_symptoms, 25))
+```
+
+Let's now look at the sets of symptoms and see
+
+* whether some in the literature happen to be duplicated for different pathogens
+* the number of sets and their frequency observed in the farms
+* what are the sets in the literature that not observed in the farms and vice
+versa
+
+First, whether some are duplicated. For that we need the followin function that
+generates the combination of symptoms:
+
+```{r}
+make_combinations <- function(df) {
+  df %>%
+    select(matches("^S(_|\\.)"), young, old) %>%
+    apply(1, paste, collapse = "-")
+}
+```
+
+And let's use this function is the code below to identify possible sets of
+symptoms that are the same for several pathogens:
+
+```{r}
+etio_comb <- make_combinations(etiology)
+sapply(etio_comb[which(duplicated(etio_comb))],
+       function(x) etiology[which(etio_comb %in% x), "Pathogen"])
+```
+
+This means that the avian metapneumovirus and *Mycoplasma gallisepticum* have
+exactly the same set of symptoms. Same for Gumboro and *Salmonella pullorum*.
+Not really a good news since, for these 2 sets of symptoms, one possible
+etiologic agent is a virus and the other one is a bacteria.
+
+Next, let's look at the sets of symptoms in the data observed in the farms.
+
+```{r}
+surveillance %>% 
+  episodes_weeks() %>% 
+  select(-FARMCODE) %>% 
+  unique() %>% 
+  nrow()
+```
+
+We thus observe 58 differents sets of symptoms in the farms. Let's looks at the
+distribution of the sets of symtoms by disease episode:
+
+```{r}
+surveillance %>% 
+  episodes_weeks() %>% 
+  unique() %>% 
+  select(-FARMCODE) %>% 
+  mutate_all(as.numeric) %>% 
+  apply(1, paste, collapse = "") %>% 
+  table() %>% 
+  sort(TRUE) %>% 
+  unname() %>% 
+  barplot()
+```
+
+```{r}
+# the names of the symptoms, used to create the 2 vectors "sympt_sets_from_lit"
+# and "sympt_etio_map" below:
+symptoms_names <- surveillance %>% 
+  episodes_weeks() %>% 
+  select(-FARMCODE) %>% 
+  names()
+
+# the sets of symptoms observed in the literature:
+sympt_sets_from_lit <- etiology %>%
+  select(one_of(symptoms_names)) %>% 
+  unique() %>% 
+  mutate_all(as.numeric) %>% 
+  apply(1, paste, collapse = "")
+
+# this vector maps the set of symptoms observed in the literature to the names
+# of the pathognes and is used by the "fct" function defined below:
+sympt_etio_map <- etiology %>%
+  select(Pathogen, one_of(symptoms_names)) %>% 
+  mutate(set = select(., -Pathogen) %>% mutate_all(as.numeric) %>% apply(1, paste, collapse = "")) %>% 
+  select(Pathogen, set) %$% 
+  setNames(Pathogen, set)
+
+# this function replace a set of symptoms by the name of the corresponding
+# pathogen when it is present in the literature. Used in the pipeline that
+# follows after:
+fct <- function(x) {
+  ifelse(is.na(x), x, paste(abbreviations[sympt_etio_map[names(sympt_etio_map) == x]], collapse = ", "))
+}
+
+# here is the pipeline:
+observed_sympt_sets <- surveillance %>% 
+  episodes_weeks() %>% 
+  unique() %>%
+  select(-FARMCODE) %>% 
+  mutate_all(as.numeric) %>% 
+  apply(1, paste, collapse = "") %>% 
+  table() %>% 
+  sort(TRUE) %>% 
+  data.frame() %>%
+  setNames(c("sets", "frequency")) %>% 
+  mutate(sets   = as.character(sets),
+         in_lit = ifelse(sets %in% sympt_sets_from_lit, sets, NA) %>% sapply(fct))
+```
+
+```{r include = F, eval = F}
+plot_observed_symptoms <- function(obs) {
+  obs %>% 
+    select(-FARMCODE) %>% 
+    t() %>% 
+    Thermimage::mirror.matrix() %>% 
+    image_square(col = c("lightgrey", "black"), axes = FALSE)
+  conditions <- c("R", "D", "C", "M", "L", "S", "Y", "O")
+  mtext(conditions, at = seq(0, 1, le = length(conditions)), family = "mono")
+  ys <- seq(0, 1, le = nrow(obs))
+  format <- "% 5s % 6s % 2s"
+  mtext2 <- function(...) mtext(..., side = 2, line = -6.5, las = 2, family = "mono")
+  mtext2(sprintf(format, "cycle", "farm", "ep"), at = tail(ys, 1) + ys[2])
+  mtext2(sapply(rev(strsplit(obs$FARMCODE, "_")),
+                function(x) do.call(function(...) sprintf(format, ...), as.list(x))), at = ys)
+}
+```
+
+```{r}
+f <- function(x) {
+#  opar <- par(plt = c(.1, .9, .1, .75))
+#  on.exit(par(opar))
+  x2 <- x %>% 
+    select(sets) %>%
+    apply(1, function(y) strsplit(y, "")[[1]]) %>% # this step transposes too
+    data.frame(stringsAsFactors = FALSE) %>%
+    mutate_all(. %>% as.numeric %>% as.logical)
+  x2 %>%
+    Thermimage::mirror.matrix() %>%
+    image_square(col = c("lightgrey", "black"), axes = FALSE)
+  conditions <- c("R", "D", "C", "M", "L", "S", "Y", "O")
+  mtext(conditions, at = seq(0, 1, le = length(conditions)))
+  mtext2 <- function(...) mtext(..., side = 2, line = -15.5, las = 2)
+  mtext2(ifelse(is.na(x$in_lit), "", x$in_lit), at = seq(1, 0, le = nrow(x)))
+  
+  par(new = TRUE, plt = c(.6, .9, par("plt")[3:4]))
+  barplot(rev(observed_sympt_sets$frequency), horiz = TRUE, yaxs = "i", axes = FALSE)
+  axis(3)
+  mtext("frequency", 3, 1.5)
+  
+  par(new = TRUE, plt = c(.428, .572, .85, 1))
+  x2 %>%
+    rowSums() %>% 
+    barplot(xaxs = "i")
+}
+```
+
+```{r fig.height = 2.32 * 1.3 * 3.5, fig.width = 2 * 4.24725}
+f(observed_sympt_sets)
+```
+
+
+Finally, we use the `make_combinations` function again to check whether some 
+symptoms sets in the literature are not reported in the data, and vice versa:
+
+```{r}
+data_comb <-
+  surveillance %>% 
+  mutate(old   = WEEK > 6, # using a cut-off of 6 w to separate youngs from old
+         young = !old) %>% 
+  make_episodes(fillgaps = TRUE) %>% 
+  na.exclude() %>%
+#  select(-WEEK, -antimicrobial) %>% # to give episodes instead of weeks...
+#  distinct() %>%                    # ... comment to get weeks instead of episodes
+  make_combinations()
+```
+
+```{r}
+table(data_comb %in% etio_comb)
+```
+
+```{r}
+table(etio_comb %in% data_comb)
+```
+
+
+## A naive Bayes model to infer pathogens from symptoms
+
+The following function uses model `object` and data `newdata` to make
+predictions (we reversed the order of the arguments compared to predict in
+order to make it pipe compliant):
+
+```{r}
+predict2 <- function(newdata, object) {
+  require(dplyr) # %>%, mutate, select, mutate_all, funs
+  newdata %>% 
+    predict(object, ., type = "prob") %>% 
+    cbind(select(newdata, episode), .) %>%
+    mutate_all(funs(ifelse(episode < 1, NA, .))) %>% 
+    cbind(select(newdata, CYCLE, FARMCODE, WEEK, antimicrobial), .)
+}
+```
+
+
+
+
+
+```{r keynote_literature_mat, include = FALSE, eval = FALSE}
+image(t(as.matrix(select(etiology, matches("^S(_|\\.)"), old, young))), axes=F)
+box(bty="o")
+```
+
+
+```{r keynote_decision_tree, eval = FALSE, include = FALSE}
+library(rpart)
+etiology2 <- etiology
+etiology2$path <- letters[seq_len(nrow(etiology2))]
+decision_tree <- rpart(path ~ S_Respiratory + S.Diarrhoea + S.CNS +
+                       S.Malaise + S.Leglesions + S.Suddendeath + old + young,
+                       etiology2, method = "class",
+                       control = rpart.control(minsplit = 1))
+plot(decision_tree)
+text(decision_tree, cex=.5)
+```
+
+
+```{r}
+sapply(etio_comb, function(x) sum(x == data_comb))
+```
+
+```{r keynote_, eval = FALSE, include = FALSE}
+unname(round(100 * sapply(etio_comb, function(x) sum(x == data_comb)) / length(data_comb), 2))
+```
+
+```{r keynote_barplot_expert_opinions, eval = FALSE, include = FALSE}
+etiology %>%
+  select(starts_with("Score")) %>% 
+  t() %>% 
+  barplot(beside = T, horiz = T, col = RColorBrewer::brewer.pal(3, "Accent"))
+```
+
+
+Let's retrieve the predicted probabilities based on the sets of symptoms
+recorded in `surveillance`. First, let's define a naive Bayes model based on
+`etiology` that contains both data from the literature (variables of the
+formula) and prior information from experts:
+
+```{r}
+model <- etiology %>%
+  mutate(score = select(., starts_with("Score")) %>% rowMeans) %>% # averaging the scores
+  naive_bayes(Pathogen ~ S_Respiratory + S.Diarrhoea + S.CNS + S.Malaise +
+                         S.Leglesions + S.Suddendeath + old + young, ., .$score, 1)
+```
+
+Then we can combine this model and (pre-processed) surveillance data to make
+predictions:
+
+```{r}
+predictions <-
+  surveillance %>% 
+  mutate(old   = WEEK > 6, # using a cut-off of 6 w to separate youngs from old
+         young = !old) %>% 
+  make_episodes(fillgaps = TRUE) %>% 
+  predict2(model)
+```
+
+
+## Using the model's predictions
+
+### A pathogen table
+
+Let's start by defining a number of utilitary functions:
+
+```{r}
+summary_by <- function(x, name) {
+  require(magrittr) # %>% 
+  x %>% 
+    colMeans() %>% 
+#    `*`(100) %>% 
+    (function(x) lapply(list(names, I), function(f) f(x))) %>%
+    as.data.frame(stringsAsFactors = FALSE) %>%
+    setNames(c("Pathogen", name))
+}
+```
+
+The above function is used exclusively by the following 2 functions. The
+function `by_week` computes the probability of presence of pathogens, by week of
+disease episode:
+
+```{r}
+by_week <- function(pred) {
+  pred %>%
+    select(-CYCLE, -FARMCODE, -WEEK, -antimicrobial, -episode) %>%
+    na.exclude() %>%
+    summary_by("proba_week")
+}
+```
+
+The following function computes the probability of presence of pathogens, by
+disease episode:
+
+```{r}
+by_episode <- function(pred) {
+  pred %>%
+    select(-WEEK, -antimicrobial) %>%
+    na.exclude() %>%
+    unique() %>% 
+    select(-CYCLE, -FARMCODE, -episode) %>%
+    summary_by("proba_episode")
+}
+```
+
+Let's use the 2 above functions to generate the table of pathogens:
+
+```{r eval = F, include = F}
+table2 <- lapply(c(by_week, by_episode), function(f) f(predictions)) %>% 
+  do.call(merge, .) %>% 
+  merge(select(etiology, Pathogen, starts_with("Score"))) %>% 
+  arrange(desc(proba_week)) %>% 
+  mutate_at(-1, as.numeric) %>% 
+  mutate(x      = select(., starts_with("Score")) %>% rowMeans(),
+         y      = select(., starts_with("proba")) %>% rowMeans(),
+         ratio0 = x / y,
+         ratio  = ifelse(ratio0 > 1, ratio0, 1 / ratio0))
+ovv(table2)
+```
+
+```{r}
+table_pathogens <- lapply(c(by_week, by_episode), function(f) f(predictions)) %>% 
+  do.call(merge, .) %>% 
+  merge(select(etiology, Pathogen, starts_with("Score"))) %>% 
+  arrange(desc(proba_week)) %>% 
+  mutate_at(-1, as.numeric) %>% 
+  mutate(x      = select(., starts_with("Score")) %>% rowMeans(),
+         y      = select(., starts_with("proba")) %>% rowMeans(),
+         ratio0 = x / y,
+         ratio  = ifelse(ratio0 > 1, ratio0, 1 / ratio0))
+ovv(table_pathogens)
+```
+
+
+<!-- ```{r fig.height = 4.5, fig.width = 4.5} -->
+<!-- lim <- -->
+<!--   table2 %>% -->
+<!--   select(proba_week, proba_episode) %>%  -->
+<!--   range() %>%  -->
+<!--   map2(c(floor, ceiling), function(x, f) f(x)) %>%  -->
+<!--   unlist() -->
+
+<!-- opar <- par(pty = "s") -->
+
+<!-- with(table2, plot(proba_week, proba_episode, pch = 21, pty = "s", bty = "o", -->
+<!--                   bg = adjustcolor("red", .3), xlim = lim, ylim = lim, -->
+<!--                   xlab = "average score of presence per week", -->
+<!--                   ylab = "average score of presence per episode")) -->
+
+<!-- abline(0, 1) -->
+<!-- abline(0, 1.5, lty = 2) -->
+<!-- abline(0, 2 / 3, lty = 2) -->
+
+<!-- table2 %>%  -->
+<!--   filter(proba_week > 7) %$% -->
+<!--   text(proba_week, proba_episode, abbreviations[Pathogen], pos = 4, -->
+<!--        font = ifelse(grepl("\\.", abbreviations[Pathogen]), 3, 1)) -->
+<!-- par(opar) -->
+<!-- ``` -->
+
+<!-- ```{r} -->
+<!-- with(table2, cor.test(proba_week, proba_episode)) -->
+<!-- ``` -->
+
+<!-- Looking at the correlations between the scores of the three experts: -->
+
+<!-- ```{r, fig.height = 6, fig.width = 6} -->
+<!-- table2 %>%  -->
+<!--   select(starts_with("Score")) %>%  -->
+<!--   setNames(paste("expert", 1:3)) %>%  -->
+<!--   mcgraph::paircor(digits = 2, cex = 1.5, pch = 21, bty_upper = "o", -->
+<!--                    bty_lower = "o", bg = adjustcolor("red", .3), -->
+<!--                    axeslim = c(0, 14), cex.labels = 1.5, cex.axis = 1.5, -->
+<!--                    axes_lower = TRUE) -->
+<!-- ``` -->
+
+<!-- Let's compare the average prior score with the average posterior score: -->
+
+<!-- ```{r fig.height = 4.5, fig.width = 4.5} -->
+<!-- opar <- par(pty = "s") -->
+
+<!-- table2 %$%  -->
+<!--   plot(x, y, pty = "s", bty = "o", col = "white", -->
+<!--        xlim = c(0, max(x, y)), -->
+<!--        ylim = c(0, max(x, y)), -->
+<!--        xlab = "average prior score from experts", -->
+<!--        ylab = "average posterior score from naive Bayes model") -->
+
+<!-- abline(0, 1) -->
+<!-- for(i in c(.5, 2)) abline(0, i, lty = 2) -->
+<!-- for(i in c(3:10, 2:5 * 10)) { -->
+<!--   abline(0, i, col = "lightgrey", lwd = .5) -->
+<!--   abline(0, 1 / i, col = "lightgrey", lwd = .5) -->
+<!-- } -->
+
+<!-- table2 %$% points(x, y, pch = 21, bg = adjustcolor("red", .3))  -->
+
+<!-- table2 %>%  -->
+<!--   filter(ratio > 2.1) %>%  -->
+<!--   mutate(pos  = ifelse(Pathogen == "Eimeria spp. (coccidiosis)", 1, -->
+<!--                        ifelse(Pathogen == "Avibacterium paragallinarum" , 3, 4)), -->
+<!--          font = ifelse(Pathogen %in% c("Highly Pathogenic Avian Influenza virus", -->
+<!--                                        "Infectious Bronchitis Virus", -->
+<!--                                        "Avian metapneumovirus"), 1, 3)) %$%  -->
+<!--   text(x, y, abbreviations[as.character(Pathogen)], .5, pos, font = font, cex = .75) -->
+
+<!-- par(opar) -->
+<!-- ``` -->
+
+<!-- ```{r} -->
+<!-- with(table2, cor.test(x, y)) -->
+<!-- ``` -->
+
+<!-- Let's see another to compare the prior and posterior scores of presence of the  -->
+<!-- pathogens. For that, we need a number of utilitary functions. First a tuned  -->
+<!-- version of the `graphics::barplot` function: -->
+
+<!-- ```{r} -->
+<!-- barplot2 <- function(df, width = 1, space = NULL, ...) { -->
+<!--   if (is.null(space)) space <- .2 -->
+<!--   df %>% -->
+<!--     select(prior, posterior) %>% -->
+<!--     as.matrix() %>% -->
+<!--     barplot(width, space, ...) -->
+<!--   df %$% -->
+<!--     segments(width + space, c(0, cumsum(prior)), -->
+<!--              width + 2 * space, c(0, cumsum(posterior)), lwd = .5) -->
+<!--   df -->
+<!-- } -->
+<!-- ``` -->
+
+<!-- The following function calculate of the mid values of a vector: -->
+
+<!-- ```{r} -->
+<!-- midval <- function(x) x %>%  -->
+<!--   cumsum() %>% -->
+<!--   cbind(c(0, .[-length(.)]), .) %>% -->
+<!--   rowMeans() -->
+<!-- ``` -->
+
+<!-- The following function is a tuned version of the `graphics::text` function: -->
+
+<!-- ```{r} -->
+<!-- text2 <- function(df, var, x, threshold = 0, ...) { -->
+<!--   sel <- df[[var]] > threshold -->
+<!--   textval <- abbreviations[df$Pathogen] -->
+<!--   fontval <- ifelse(grepl("\\.", textval), 3, 1) -->
+<!--   text(x, midval(df[[var]])[sel], textval[sel], font = fontval[sel]) -->
+<!--   invisible(df) -->
+<!-- } -->
+<!-- ``` -->
+
+<!-- Let's use the 3 previous functions for the following plot: -->
+
+<!-- ```{r fig.width = 5, fig.height = 4} -->
+<!-- width <- 1 -->
+<!-- space <- .2 -->
+<!-- table2 %>% -->
+<!--   mutate(prior     = select(., starts_with("Score")) %>% rowMeans, -->
+<!--          posterior = select(., starts_with("proba")) %>% rowMeans) %>% -->
+<!--   arrange(desc(prior)) %T>%  -->
+<!--   barplot2(width, space, ylab = "score") %>%  -->
+<!--   text2("prior", (width + 2 * space) / 2, 4, cex = .9) %>%  -->
+<!--   text2("posterior", (3 * width + 4 * space) / 2, 4, cex = .9) -->
+<!-- ``` -->
+
+
+<!-- ### Diseases episodes durations -->
+
+<!-- Let's now investigate the durations of the diseases episodes and see whether -->
+<!-- there are any difference between the pathogens. First, we need to removing the -->
+<!-- episodes that start or end a cycle: -->
+
+<!-- ```{r} -->
+<!-- not_sick <- function(x, pattern) x %>% -->
+<!--   as.character() %>% -->
+<!--   paste(collapse = "") %>% -->
+<!--   grepl(pattern, .) -->
+<!-- ``` -->
+
+<!-- The above function is used exclusively by the following function that is itself -->
+<!-- used exclusively by the function after: -->
+
+<!-- ```{r} -->
+<!-- .not_sick_df <- function(df, pattern, name) df %>% -->
+<!--   survey_episodes() %>% -->
+<!--   t() %>% -->
+<!--   as.data.frame() %>% -->
+<!--   sapply(not_sick, pattern) %>% -->
+<!--   data.frame2(names(.), .) %>%  -->
+<!--   setNames(c("FARMCODE", name)) -->
+<!-- ``` -->
+
+<!-- ```{r} -->
+<!-- not_sick_df <- function(pattern, name, df) df %>% -->
+<!--   split(.$CYCLE) %>% -->
+<!--   lapply(.not_sick_df, pattern, name) %>%  -->
+<!--   do.call(function(...) bind_rows(..., .id = "CYCLE"), .) %>% -->
+<!--   mutate(CYCLE = as.numeric(CYCLE)) -->
+<!-- ``` -->
+
+<!-- We can now compute the durations of the diseases episodes for each pathogen, -->
+<!-- without excluding the episodes that start or end a cycle: -->
+
+<!-- ```{r} -->
+<!-- epi_duration <- predictions %>% -->
+<!--   group_by(CYCLE, FARMCODE, episode) %>% -->
+<!--   na.exclude() %>% -->
+<!--   tally() %>%  -->
+<!--   ungroup() -->
+<!-- ``` -->
+
+<!-- and excluding them: -->
+
+<!-- ```{r} -->
+<!-- epi_duration2 <- predictions %>% -->
+<!--   map2(c("^1", "10"), c("startnotsick", "endnotsick"), not_sick_df, .) %>%  -->
+<!--   do.call(merge, .) %>%  -->
+<!--   filter(startnotsick, endnotsick) %>%  -->
+<!--   select(-startnotsick, -endnotsick) %>% -->
+<!--   left_join(epi_duration, c("CYCLE", "FARMCODE")) %>%  -->
+<!--   na.exclude() -->
+<!-- ``` -->
+
+<!-- We can compare the distributions of the two computed durations in order to see -->
+<!-- there is a significant censoring effect: -->
+
+<!-- ```{r} -->
+<!-- hist2 <- function(x, to = NULL, ...) { -->
+<!--   if (is.null(to)) to <- max(x + 1) -->
+<!--   hist(x, seq(0, to), xlab = "duration of episode", -->
+<!--        ylab = "number of episodes", main = NA, ...) -->
+<!-- } -->
+<!-- fct <- function(x, ...) hist2(x, 22, ylim = c(0, 110), ...) -->
+<!-- hist_all <- fct(epi_duration$n, col = "grey") -->
+<!-- par(new = TRUE) -->
+<!-- hist_sbs <- fct(epi_duration2$n, col = "red") -->
+<!-- ``` -->
+
+<!-- The two distributions are not significantly different: -->
+
+<!-- ```{r} -->
+<!-- list(hist_all, hist_sbs) %>% -->
+<!--   sapply(`[[`, "counts") %>% -->
+<!--   fisher.test(simulate.p.value = TRUE, B = 1e7) -->
+<!-- ``` -->
+
+<!-- Let's now see whether there are differences in episodes durations between the -->
+<!-- various pathogens. For that we first need to tune a bit the `vioplot::vioplot` -->
+<!-- function: -->
+
+<!-- ```{r} -->
+<!-- vioplot2 <- function(df, range=1.5, horizontal=FALSE, col="magenta", -->
+<!--                      border="black", lty=1, lwd=1, rectCol="black", -->
+<!--                      colMed="white", pchMed=19, at, add=FALSE, wex=1, -->
+<!--                      drawRect=TRUE) { -->
+<!--   if (missing(at)) at <- 1:length(df) -->
+<!--   do.call(function(...) vioplot(df[, 1], ..., range = range, -->
+<!--                                 horizontal = horizontal, col = col, -->
+<!--                                 border = border, lty = lty, lwd = lwd, -->
+<!--                                 rectCol = rectCol, colMed = colMed, -->
+<!--                                 pchMed = pchMed, at = at, add = add, wex = wex, -->
+<!--                                 drawRect = drawRect), df[, -1]) -->
+<!-- } -->
+<!-- ``` -->
+
+<!-- The following function arranges the columns of a data frame according to some -->
+<!-- criterion computed by the `f` function passed as an argument: -->
+
+<!-- ```{r} -->
+<!-- arrange_columns <- function(df, f, ...) { -->
+<!--   df[, order(apply(df, 2, f, ...))] -->
+<!-- } -->
+<!-- ``` -->
+
+<!-- Let's compute a processed version of the `prediction` table: -->
+
+<!-- ```{r} -->
+<!-- predictions3 <- predictions %>% -->
+<!--   select(-WEEK, -antimicrobial) %>% -->
+<!--   na.exclude() %>% -->
+<!--   unique() %>% -->
+<!--   right_join(epi_duration, c("CYCLE", "FARMCODE", "episode")) %>% -->
+<!--   mutate_at(vars(-one_of(c("CYCLE", "FARMCODE", "episode", "n"))), funs(. * n)) %>%  -->
+<!--   select(-CYCLE, -FARMCODE, -episode, -n) -->
+<!-- ``` -->
+
+<!-- ```{r eval=F, include=F} -->
+<!-- predictions3 %>%  -->
+<!--   arrange_columns(median) %>%  -->
+<!--   mutate_all(log) %T>%  -->
+<!--   vioplot2() %>% -->
+<!--   names() -->
+<!-- ``` -->
+
+<!-- Let's now see whether the medians (or mean, or min, or max) of these -->
+<!-- distributions are correlated with the probability of presence per episode. If -->
+<!-- yes, it means that the pathogens do not differ in terms of duration of -->
+<!-- infection. If not, it means that they do. -->
+
+<!-- ```{r eval=F, include=F} -->
+<!-- predictions3 %>%  -->
+<!--   apply(2, mean) %>%  -->
+<!--   data.frame2(Pathogen = names(.), duration = .) %>%  -->
+<!--   left_join(table2, "Pathogen") %$%  -->
+<!--   plot(proba_episode, duration) -->
+<!-- ``` -->
+
+<!-- A linear model: -->
+
+<!-- ```{r} -->
+<!-- model <- predictions3 %>%  -->
+<!--   gather("x", "y") %>% -->
+<!--   mutate(x = log(with(table2, setNames(proba_episode, Pathogen))[x]), -->
+<!--          y = log(y)) %>% -->
+<!--   lm(y ~ x, .) -->
+<!-- ``` -->
+
+<!-- The plot: -->
+
+<!-- ```{r} -->
+<!-- # the plot frame --------------------------------------------------------------- -->
+<!-- plot(NA, xlim = c(-1, 3), ylim = c(-8, 2), axes = FALSE, -->
+<!--      xlab = "average score of presence per episode", -->
+<!--      ylab = "durations of infection episodes") -->
+
+<!-- # the violin plots ------------------------------------------------------------- -->
+<!-- table2 %>%  -->
+<!--   arrange(proba_episode) %>%  -->
+<!--   select(Pathogen) %>%  -->
+<!--   unlist() %>%  -->
+<!--   `[`(predictions3, .) %>%  -->
+<!--   mutate_all(log) %>% -->
+<!--   vioplot2(at = log(sort(table2$proba_episode)), col = adjustcolor("grey", .25), -->
+<!--            drawRect = FALSE, wex = .5, add = T, -->
+<!--            rectCol = adjustcolor("black", .25)) -->
+
+
+<!-- # the confidence and prediction intervals -------------------------------------- -->
+<!-- xs <- seq(-1, 3, le = 100) -->
+<!-- fct <- function(int, ltype) { -->
+<!--   pred <- predict(model, data.frame(x = xs), interval = int) -->
+<!--   with(as.data.frame(pred), { -->
+<!--     lines(xs, lwr, lty = ltype) -->
+<!--     lines(xs, upr, lty = ltype) -->
+<!--   }) -->
+<!-- } -->
+<!-- abline(model) -->
+<!-- fct("confidence", 2) -->
+<!-- fct("prediction", 3) -->
+
+<!-- # the log-scale axes ----------------------------------------------------------- -->
+<!-- par(new = TRUE) -->
+<!-- plot(NA, xlim = exp(c(-1, 3)), ylim = exp(c(-8, 2)), log = "xy", -->
+<!--      ann = FALSE, axes = FALSE) -->
+<!-- sfsmisc::eaxis(1) -->
+<!-- sfsmisc::eaxis(2, hadj = 1.1) -->
+<!-- ``` -->
+
+
+<!-- ### The probability of resistance for each pathogen -->
+
+<!-- For each pathogen, we want to compute the probability of treatment failure (i.e. -->
+<!-- of using the incorrect treatment). The analysis will necessarily be by week. -->
+<!-- This is an `NA` returned value used by the function `compute_resistance` that -->
+<!-- follows after: -->
+
+<!-- ```{r} -->
+<!-- naval <- -->
+<!--   predictions %>% -->
+<!--   select(-CYCLE, -FARMCODE, -WEEK, -antimicrobial, -episode) %>% -->
+<!--   names() %>%  -->
+<!--   setNames(rep(NA, length(.)), .) -->
+<!-- ``` -->
+
+<!-- The following function computes resistance level for each pathogen and the -->
+<!-- used set of antibiotics for a given week: -->
+
+<!-- ```{r} -->
+
+<!-- compute_resistance <- function(x) { -->
+<!--   if (is.null(x)) return(naval) -->
+<!--   amr %>% -->
+<!--     filter(drug %in% x) %>% -->
+<!--     select(-class, -drug) %>% -->
+<!--     apply(2, min) -->
+<!-- } -->
+<!-- ``` -->
+
+<!-- The following function allows to correct for the fact that there is not -->
+<!-- chlortetracycline information in the `amr` data set. We thus consider that it is -->
+<!-- a simple tetracycline: -->
+
+<!-- ```{r} -->
+<!-- correction <- function(x) { -->
+<!--   if (is.null(x)) return(NULL) -->
+<!--   sub("CHLORTETRACYCLINE", "TETRACYCLINE", x) -->
+<!-- } -->
+<!-- ``` -->
+
+<!-- Let's use the 2 previous functions to compute the levels of resistance: -->
+
+<!-- ```{r} -->
+<!-- resistance <- predictions$antimicrobial %>%  -->
+<!--   lapply(correction) %>% -->
+<!--   lapply(compute_resistance) %>%  -->
+<!--   do.call(bind_rows, .) -->
+<!-- ``` -->
+
+<!-- The following function allows to separate the columns of a data frame into two -->
+<!-- sets of data frames, according to a pattern to match in the columns names: -->
+
+<!-- ```{r} -->
+<!-- separate_columns <- function(df, match) { -->
+<!--   select(df, ends_with(match)) %>%  -->
+<!--     setNames(., sub(match, "", names(.))) -->
+<!-- } -->
+<!-- ``` -->
+
+<!-- A utilitary function that applies 2 different functions to a list of 2 lists: -->
+
+<!-- ```{r} -->
+<!-- f1 <- function(df) sweep(df, 2, apply(df, 2, sum), "/") -->
+<!-- f2 <- function(df, var) df[, var] -->
+<!-- f3 <- function(lst) list(f1(lst[[1]]), f2(lst[[2]], names(lst[[1]])))  -->
+<!-- ``` -->
+
+<!-- The following function uses the 2 previous functions to compute the levels of -->
+<!-- resistance: -->
+
+<!-- ```{r} -->
+<!-- proba_treat_failure <- function(pred, res) { -->
+<!--   cbind(setNames(pred, paste0(names(pred), "_p")), -->
+<!--         setNames(res,  paste0(names(res),  "_r"))) %>%  -->
+<!--     filter(!sapply(.$antimicrobial_p, is.null), !is.na(episode_p)) %>% -->
+<!--     select(-CYCLE_p, -FARMCODE_p, -WEEK_p, -antimicrobial_p, -episode_p) %>% -->
+<!--     (function(df) lapply(c("_p", "_r"), -->
+<!--                          function(match) separate_columns(df, match))) %>%  -->
+<!--     f3() %>%  -->
+<!--     do.call(`*`, .) %>%  -->
+<!--     apply(2, sum) -->
+<!-- } -->
+<!-- ``` -->
+
+<!-- And it gives: -->
+
+<!-- ```{r} -->
+<!-- proba_treat_failure(predictions, resistance) %>% head() -->
+<!-- ``` -->
+
+<!-- The following function computes the probability of use of antimicrobials: -->
+
+<!-- ```{r} -->
+<!-- proba_use_ab <- function(df) { -->
+<!--   df %>% -->
+<!--     filter(!is.na(episode)) %>% -->
+<!--     mutate(antimicrobial = !sapply(antimicrobial, is.null)) %>% -->
+<!--     select(-CYCLE, -FARMCODE, -WEEK, -episode) %>% -->
+<!--     mutate_if(is.numeric, funs(antimicrobial * . / sum(.))) %>% -->
+<!--     select(-antimicrobial) %>% -->
+<!--     apply(2, sum) -->
+<!-- } -->
+<!-- ``` -->
+
+<!-- And it gives: -->
+
+<!-- ```{r} -->
+<!-- proba_use_ab(predictions) %>% head() -->
+<!-- ``` -->
+
+<!-- Let's include the two previous functions into a pipe that gathers the -->
+<!-- prevalence, the probability of antimicrobial use, the probability of treatment -->
+<!-- failure and the the combined probability of treatment failure for all the -->
+<!-- pathogens: -->
+
+<!-- ```{r} -->
+<!-- a <- proba_treat_failure(predictions, resistance) -->
+<!-- b <- proba_use_ab(predictions) -->
+
+<!-- table3 <- list(select(table2, Pathogen, proba_week), -->
+<!--                data.frame2(Pathogen = names(b), proba_use_ab = 100 * b), -->
+<!--                data.frame2(Pathogen = names(a), proba_treat_failure = a)) %>%  -->
+<!--   Reduce(function(x, y) merge(x, y, all = TRUE), ., accumulate = FALSE) %>%  -->
+<!--   arrange(desc(proba_week)) %>%  -->
+<!--   mutate(proba_tot = 100 * (proba_treat_failure / 100) * -->
+<!--                            (proba_use_ab / 100) * -->
+<!--                            (proba_week / 100)) -->
+<!-- ``` -->
+
+<!-- Adding the total level of resistance -->
+
+<!-- ```{r} -->
+<!-- bind_rows(table3, setNames(data.frame2("total", NA, NA, NA, sum(table3$proba_tot)), names(table3))) %>% ovv() -->
+<!-- ``` -->
+
+<!-- It means that whenever we use an antimicrobial during a disease episode, there -->
+<!-- about 26 % chance of treatment failure. Let's end this section by looking at the -->
+<!-- share of viruses in this treatment failure: -->
+
+<!-- ```{r} -->
+<!-- (virus_share <- table3 %>% -->
+<!--   filter(grepl("irus", Pathogen)) %>% -->
+<!--   select(proba_tot) %>% -->
+<!--   sum()) -->
+<!-- ``` -->
+
+<!-- The percentage of treatement failure due to viruses: -->
+
+<!-- ```{r} -->
+<!-- 100 * virus_share / sum(table3$proba_tot) -->
+<!-- ``` -->
+
+<!-- The proba per week for viruses: -->
+
+<!-- ```{r} -->
+<!-- table3 %>% -->
+<!--   filter(grepl("irus", Pathogen)) %>% -->
+<!--   select(proba_week) %>% -->
+<!--   sum() -->
+<!-- ``` -->
+
+<!-- Let's look at the relationship between the prevalence and resistance of pathogens: -->
+
+<!-- ```{r} -->
+<!-- with(table3, plot(proba_week, proba_treat_failure, ylim = c(0, 100), pch = 21, -->
+<!--                   xlab = "probability of presence", xlim = c(0, 15), -->
+<!--                   ylab = "resistance", bg = adjustcolor("red", .3))) -->
+
+<!-- table3 %>% -->
+<!--   filter(proba_week > 7) %>% -->
+<!--   mutate(pos = ifelse(grepl("Erysipelothrix", Pathogen), 3, 1)) %$%  -->
+<!--   text(proba_week, proba_treat_failure, abbreviations[Pathogen], pos = pos, -->
+<!--        font = ifelse(grepl("\\.", abbreviations[Pathogen]), 3, 1)) -->
+<!-- ``` -->
+
+<!-- ### The probability of resistance for each drug -->
+
+<!-- For each antibiotic, let's compute the probability of usage per week. First, the -->
+<!-- probability of usage per week of episode: -->
+
+<!-- ```{r} -->
+<!-- table4 <- amr$drug %>%  -->
+<!--   sapply(function(x) sapply(predictions$antimicrobial, function(y) x %in% y)) %>%  -->
+<!--   cbind(select(predictions, episode)) %>%  -->
+<!--   split(., is.na(.$episode)) %>%  -->
+<!--   lapply(function(x) select(x, -episode) %>% colMeans) %>%  -->
+<!--   data.frame() %>%  -->
+<!--   transmute(drug     = rownames(.), -->
+<!--             no_dis_w = FALSE., -->
+<!--             dis_week = TRUE.) -->
+<!-- ``` -->
+
+<!-- The ratio of the number of week with disease over the number of weeks without -->
+<!-- diseases: -->
+
+<!-- ```{r} -->
+<!-- ratio <- predictions %>% -->
+<!--   select(episode) %>%  -->
+<!--   is.na() %>%  -->
+<!--   table() %>%  -->
+<!--   as.list() %>%  -->
+<!--   do.call(`/`, .) -->
+<!-- ``` -->
+
+<!-- A linear model and its confidence intervals: -->
+
+<!-- ```{r} -->
+<!-- model <- with(table4, lm(dis_week ~ no_dis_w)) -->
+<!-- xs <- seq(-.02, .22,, le = 100) -->
+<!-- pred95 <- model %>%  -->
+<!--   predict(data.frame(no_dis_w = xs), interval = "confidence") %>%  -->
+<!--   as.data.frame() -->
+<!-- pred99 <- model %>%  -->
+<!--   predict(data.frame(no_dis_w = xs), interval = "confidence", level = .99) %>%  -->
+<!--   as.data.frame() -->
+<!-- ``` -->
+
+<!-- The plot: -->
+
+<!-- ```{r} -->
+<!-- # the fram of the plot --------------------------------------------------------- -->
+<!-- with(table4, plot(dis_week ~ no_dis_w, type = "n", -->
+<!--                   xlab = "probability of use during a week without disease", -->
+<!--                   ylab = "probability of use during a week with disease")) -->
+
+<!-- # the linear model prediction with confidence intervals ------------------------ -->
+<!-- polygon(c(xs, rev(xs)), c(pred99$lwr, rev(pred99$upr)), -->
+<!--         col = "lightgrey", border = NA) -->
+<!-- polygon(c(xs, rev(xs)), c(pred95$lwr, rev(pred95$upr)), -->
+<!--         col = "grey", border = NA) -->
+<!-- lines(xs, pred95$fit) -->
+<!-- abline(0, ratio, lty = 2) # the expectation -->
+
+<!-- # adding the data points ------------------------------------------------------- -->
+<!-- with(table4, points(dis_week ~ no_dis_w, pch = 21, bg = adjustcolor("red", .3))) -->
+
+<!-- # the points labels ------------------------------------------------------------ -->
+<!-- coeff <- coef(model) -->
+<!-- table4 %>%  -->
+<!--   mutate(pos = ifelse(dis_week > coeff[1] + coeff[2] * no_dis_w, 2, 4), -->
+<!--          pos = ifelse(no_dis_w > .19, 2, pos), -->
+<!--          pos = ifelse(drug %in% c("NEOMYCIN"), 3, pos), -->
+<!--          pos = ifelse(drug %in% c("AMOXICILLIN", "TRIMETHOPRIM"), 2, pos), -->
+<!--          pos = ifelse(drug %in% c("SULFAMETHOXAZOLE"), 4, pos)) %>%  -->
+<!--   filter(no_dis_w > .02) %$% -->
+<!--   text(no_dis_w, dis_week, abbreviations[drug], pos = pos) -->
+<!-- ``` -->
+
+<!-- In the following temporary data frame we put next to each other the -->
+<!-- antimicrobial usage (boolean) for each week and each drug and the probability of -->
+<!-- presence, for each week and each pathogen. Note that each row of the `tmp` data -->
+<!-- frame is a week and that for each week of this data frame there is both a -->
+<!-- disease episode and the use of antimicriobial(s). -->
+
+<!-- ```{r} -->
+<!-- tmp <- amr$drug %>%  -->
+<!--   sapply(function(x) sapply(predictions$antimicrobial, function(y) x %in% y)) %>%  -->
+<!--   cbind(select(predictions, -CYCLE, -FARMCODE, -WEEK)) %>%  -->
+<!--   filter(!sapply(antimicrobial, is.null), !is.na(episode)) %>%  -->
+<!--   select(-antimicrobial, -episode) -->
+<!-- ``` -->
+
+<!-- The following function compute the level of resistance for a given drug in a -->
+<!-- given week. This level of resistance depends on the assemblage of the different -->
+<!-- pathogens during the week in question. Note that we need to rename the drugs -->
+<!-- because the `dplyr::select` function does not manage variables names that -->
+<!-- contain space. -->
+
+<!-- ```{r} -->
+<!-- amr2 <- amr -->
+<!-- amr2$drug <- sub(" ", "_", amr2$drug) -->
+<!-- resistance_for_drug <- function(x) { -->
+<!--   amr2 %>%  -->
+<!--     filter(drug == x) %>% -->
+<!--     select(-class, -drug) %>% -->
+<!--     unlist() %>% -->
+<!--     data.frame2(Pathogen = names(.), proba = .) -->
+<!-- }  -->
+<!-- ``` -->
+
+<!-- The following function uses the `tmp` temporary data frame and the above -->
+<!-- function and computes the resistance level of a given drug (for all weeks). Note -->
+<!-- that we here too have to deal with the space in some of the variables' names. -->
+
+<!-- ```{r} -->
+<!-- names(tmp) <- sub("OXOLINIC ACID", "OXOLINIC_ACID", names(tmp)) -->
+<!-- drug_resistance <- function(drug) { -->
+<!--   tmp %>%  -->
+<!--     filter_(drug) %>%  -->
+<!--     select_if(is.numeric) %>%  -->
+<!--     colSums() %>%  -->
+<!--     (function(x) x / sum(x)) %>%  -->
+<!--     data.frame2(Pathogen = names(.), proba = .) %>%  -->
+<!--     left_join(resistance_for_drug(drug), "Pathogen") %$% -->
+<!--     sum(proba.x * proba.y) -->
+<!-- } -->
+<!-- ``` -->
+
+<!-- which gives: -->
+
+<!-- ```{r} -->
+<!-- (a <- sapply(amr2$drug, drug_resistance)) -->
+<!-- ``` -->
+
+<!-- Note that there are 6 drugs that are just never used during disease episodes: -->
+
+<!-- ```{r} -->
+<!-- sapply(names(a[is.nan(a)]), function(x) sum(tmp[[x]])) -->
+<!-- ``` -->
+
+<!-- Adding the resistance level to `table4`: -->
+
+<!-- ```{r} -->
+<!-- table4b <- table4 %>%  -->
+<!--   left_join(data.frame2(drug = sub("_", " ", names(a)), resistance = a), "drug") %>%  -->
+<!--   arrange(desc(no_dis_w + dis_week)) -->
+<!-- ``` -->
+
+<!-- Which gives: -->
+
+<!-- ```{r} -->
+<!-- ovv(table4b) -->
+<!-- ``` -->
+
+<!-- Plotting the level of resistance of each antibiotic as a function of the -->
+<!-- probability of being used. -->
+
+<!-- ```{r} -->
+<!-- with(table4b, plot(no_dis_w + dis_week, resistance, -->
+<!--      xlab = "probability of usage", pch = 21, bg = adjustcolor("red", .3))) -->
+
+<!-- table4b %>%  -->
+<!--   filter(no_dis_w + dis_week > .1 | resistance < 65) %>% -->
+<!--   mutate(pos = ifelse(resistance > 60, 2, 4), -->
+<!--          pos = ifelse(abbreviations[drug] %in% c("oxa", "ffc"), 3, pos), -->
+<!--          pos = ifelse(abbreviations[drug] %in% c("flu"), 2, pos), -->
+<!--          pos = ifelse(abbreviations[drug] %in% c("cam"), 1, pos)) %$%  -->
+<!--   text(no_dis_w + dis_week, resistance, abbreviations[drug], pos = pos) -->
+<!-- ``` -->
+
+<!-- It shows that the more a drug is used, the more it tends to be resistant. It -->
+<!-- also shows that there is a group of 8 antimicrobials that could certainly be -->
+<!-- used more advantageously. To end this section, let's look at what would be the -->
+<!-- best antibiotic use if antimicriobials were still to be basically used at -->
+<!-- random. The following function takes a vector a pathogens' prevalence and a -->
+<!-- vector of antimicrobials usage (expressed in probability) and use the `amr` data -->
+<!-- frame to draw a heatmap showing for what drug and pathogen combination -->
+<!-- resistance level is the highest. -->
+
+<!-- ```{r} -->
+<!-- heat_map <- function(path_p, drug_p) { -->
+<!--   path_p <- sort(path_p, TRUE) -->
+<!--   drug_p <- sort(drug_p) -->
+<!--   path_names <- names(path_p) -->
+<!--   drug_names <- names(drug_p) -->
+<!-- # the colors ------------------------------------------------------------------- -->
+<!--   col <- amr %>% -->
+<!--     right_join(data.frame2(drug = drug_names), "drug") %>%  -->
+<!--     select(path_names) %>%  -->
+<!--     t() %>% -->
+<!--     as.vector() %>%  -->
+<!--     cut(c(-.1, seq(10, 100, 10))) %>%  -->
+<!--     as.numeric() %>%  -->
+<!--     `[`(rev(heat.colors(10)), .) -->
+<!-- # the coordinates -------------------------------------------------------------- -->
+<!--   x_path <- c(0, cumsum(path_p)) -->
+<!--   y_drug <- c(0, cumsum(drug_p)) -->
+<!--   coords <- expand.grid(seq_along(path_names), seq_along(drug_names)) -->
+<!-- # the heat map ----------------------------------------------------------------- -->
+<!--   opar <- par(pty = "s") -->
+<!--   on.exit(par(opar)) -->
+<!--   plot(NA, xlim = c(0, sum(path_p)), ylim = c(0, sum(drug_p)), axes = FALSE, -->
+<!--      xlab = "pathogens", ylab = "drugs", xaxs = "i", yaxs = "i") -->
+<!--   with(coords, rect(x_path[Var1],     y_drug[Var2], -->
+<!--                     x_path[Var1 + 1], y_drug[Var2 + 1], col = col, border = NA)) -->
+<!--   abline(v = cumsum(path_p), lwd = .5) -->
+<!--   abline(h = cumsum(drug_p), lwd = .5) -->
+<!--   box(bty = "o") -->
+<!-- } -->
+<!-- ``` -->
+
+<!-- And it gives: -->
+
+<!-- ```{r fig.height = 4.5, fig.width = 4.5} -->
+<!-- heat_map(with(table3, setNames(proba_week, Pathogen)), -->
+<!--          with(table4, setNames(no_dis_w + dis_week, drug))) -->
+<!-- ``` -->
+
+<!-- The same heatmap, without viruses and parasite: -->
+
+<!-- ```{r fig.height = 4.5, fig.width = 4.5} -->
+<!-- heat_map(with(filter(table3, round(proba_treat_failure, 6) < 100), -->
+<!--               setNames(proba_week, Pathogen)), -->
+<!--          with(table4, setNames(no_dis_w + dis_week, drug))) -->
+<!-- ``` -->
+
+<!-- Let's compute the resistance of the community: -->
+
+<!-- ```{r include=F, eval=F} -->
+<!-- fct <- function(path_p, drug_p) { -->
+<!--   path_names <- names(path_p) -->
+<!--   drug_names <- names(drug_p) -->
+<!--   amr %>% -->
+<!--     right_join(data.frame2(drug = drug_names), "drug") %>%  -->
+<!--     select(path_names) -->
+<!-- } -->
+<!-- ``` -->
+
+<!-- ```{r include=F, eval=F} -->
+<!-- drug_p <- with(table4, setNames(no_dis_w + dis_week, drug)) -->
+<!-- path_p <- with(table3, setNames(proba_week, Pathogen)) -->
+<!-- mat0 <- fct(with(table3, setNames(proba_week, Pathogen)), -->
+<!--             with(table4, setNames(no_dis_w + dis_week, drug))) -->
+<!-- mat1 <- t(replicate(length(drug_p), path_p)) / 100 -->
+<!-- mat2 <- replicate(length(path_p), drug_p) -->
+<!-- sum(mat0 * mat1 * mat2 / 100) -->
+<!-- ``` -->
+
+
+
+
